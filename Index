@@ -1,0 +1,1205 @@
+import { useState, useRef, useEffect } from "react";
+
+// ─── UA DESIGN TOKENS ────────────────────────────────────────────────
+const UA = {
+  red: "#CC0033", redDark: "#A50029", redLight: "#FFF0F3", redBorder: "#FFCCD6",
+  navy: "#003366", navyLight: "#EEF2F8", navyBorder: "#C5D3E8",
+  bg: "#F7F8FA", card: "#FFFFFF", border: "#E6E8EF", borderStrong: "#CFD4E0",
+  text: "#101828", textSec: "#475069", textMuted: "#8A92A8",
+  green: "#15803D", greenBg: "#F0FDF4", greenBorder: "#BBF7D0",
+  amber: "#B45309", amberBg: "#FFFBEB", amberBorder: "#FDE68A",
+  purple: "#6D28D9", purpleBg: "#F5F3FF", purpleBorder: "#DDD6FE",
+};
+
+const ICAP_COLORS = {
+  Passive: { bg: "#F1F5F9", border: "#CBD5E1", text: "#475569" },
+  Active: { bg: UA.amberBg, border: UA.amberBorder, text: UA.amber },
+  Constructive: { bg: UA.navyLight, border: UA.navyBorder, text: UA.navy },
+  Interactive: { bg: UA.greenBg, border: UA.greenBorder, text: UA.green },
+};
+
+const HARD_GUARDRAILS = `
+HARD RULES (non-negotiable, override everything else):
+1. NEVER write the student's answer, provide model responses, or complete any part of the deliverable.
+2. NEVER confirm whether the student is right before they have attempted their own explanation or committed to an answer with reasoning.
+3. Every turn MUST end by asking the student to generate something: explain, predict, defend, apply, or revise.
+4. If the student asks you to do the work ("just tell me", "write it for me"), redirect to a smaller generative step.
+5. One question at a time. Keep every response under 120 words.
+6. Push back on vague or weak claims — ask for evidence, examples, mechanism, or reasoning.
+7. Name every genuine step forward BEFORE pushing further — the student must always be able to see their progress. "Menlo Park is exactly the specific example this needs — now let's get a number behind it" is correct; twelve pushes with zero acknowledgment is a failure state.
+8. In PREPARATION mode the real deliverable stays the student's own work: never draft, script, outline verbatim, or supply any prose, phrasing, or sentences for it.
+9. In math/science, require the student to state their answer AND their reasoning before any feedback; ask "how do you know?" and "what would happen if…" rather than confirming.
+10. If the student genuinely lacks a prerequisite concept, briefly re-teach it (2-3 sentences, grounded in the course material when provided), then immediately demand they apply it. Never leave a student stuck, and never let re-teaching become answer-giving.
+11. THREE-PUSH CEILING: never push on the same point more than twice. On the third turn you MUST change strategy — scaffold a smaller step, model what a good answer looks like in shape (not content), or advance to the next challenge with the gap noted. Infinite standoffs on one demand are forbidden; the instructor summary is where unresolved gaps belong.
+12. Respect what the student cannot know yet. For research-in-progress, "I don't have that stat yet" is a legitimate state, not a failure. The right move is to convert it into a precise research task ("write down exactly what you're looking for: rent change, which neighborhood, what timeframe, from what kind of source — that's your next step") and move forward.`;
+
+const PACING_AND_FEEL = `
+PACING & FEEL (this is a game board, not a seminar):
+1. FAST FIRST WIN: The first node must be clearable in 1-2 exchanges. A right-neighborhood answer with one small sharpening LOCKS IT. Difficulty escalates across the map, never inside the opening. Momentum first, rigor rising.
+2. ONE ask per turn — never stack a mechanism question AND an evidence question in the same message. Pick the single most important next step.
+3. Keep replies under 80 words. Short, punchy, conversational — a sharp coach texting, not a professor lecturing. No bold-formatted essay questions.
+4. React like a person with stakes: "okay, NOW you're onto something" beats "that is a partial mechanism." Show genuine reaction to good moves.
+5. When a node locks, make it feel like a win in one line ("Block one is yours — deflation squeezing debt-locked farmers. Next.") before moving on.
+6. ANCHOR IN THE REAL: when re-teaching or locking a concept, connect it to actual use in a phrase, not a lecture — "that's the same math a trainer uses to program your squat progression" — so the student keeps seeing where this knowledge lives in the world.`;
+
+const AI_LITERACY_LAYER = `
+AI LITERACY LAYER: A core goal is that the student leaves more skilled at working WITH AI, not just questioned by it. Where natural: (a) coach legitimate AI use for their real deliverable — suggest a bounded sub-task for an AI tool (draft three caption options, brainstorm counterarguments, summarize a source), then have them bring the output back here to evaluate against their own verified facts; (b) when they share AI-generated content, the evaluation IS the work: what did it get wrong, what would you keep, how would you verify it — never simply reject it, teach them to interrogate it; (c) model verification habits (source, geography, timeframe, recency) as transferable AI skills, since AI tools fabricate statistics; (d) require honest attribution — using AI for a sub-task is legitimate when disclosed, submitting AI output as your own thinking is not, and the difference is the lesson.`;
+
+const VISUALS_PROTOCOL = `
+VISUALS PROTOCOL: When a concept is spatial, sequential, comparative, or a process — especially while re-teaching — you may include ONE simple inline SVG diagram per message, placed AFTER your text, wrapped exactly in <<VISUAL>> and <</VISUAL>> tags. Rules: <svg viewBox="0 0 400 240" width="100%"> ... </svg>; under 25 elements total; readable text (font-size 14+); palette #003366 (navy), #CC0033 (red accent), #475069 (gray), white background. Gentle animation via <animate> or <animateTransform> is allowed when motion clarifies a process (a pulse on the active stage, an arrow flowing between steps) — never decoration. A visual must support the student's thinking, NEVER reveal an answer they should generate. Most messages need no visual; use one only when it genuinely aids understanding.`;
+
+function sanitizeSvg(s) {
+  const t = (s || "").trim();
+  if (!t.startsWith("<svg") || !t.includes("</svg>")) return null;
+  if (/<script|javascript:|onload=|onclick=|onerror=|<foreignObject|href=/i.test(t)) return null;
+  return t.slice(0, t.lastIndexOf("</svg>") + 6);
+}
+
+const SAMPLES = [
+  {
+    label: "Psych reading response",
+    course: "PSY 150A1 — Structure of Mind & Behavior",
+    title: "Chapter 6 Reading Response: Memory",
+    description: "Read Chapter 6 (Memory). Write a 300-word summary describing the three stages of memory — sensory memory, short-term memory, and long-term memory — and provide one example of each. Submit as a Word document by Friday. 10 points.",
+  },
+  {
+    label: "Nutrition reflection",
+    course: "NSC 101 — Introduction to Nutrition",
+    title: "Diet Reflection: Where You Are vs. Where You Want to Be",
+    description: "Write a 300-word reflection comparing your current diet to the diet you should be eating based on the dietary guidelines covered in class. Identify at least three specific changes you plan to make and explain why each matters. Due Friday. 10 points.",
+  },
+  {
+    label: "Grad elevator speech",
+    course: "GRAD 496A — UROC Programs",
+    title: "Elevator Speech",
+    description: "Provide a three-minute speech introducing yourself, delivered live on Zoom in front of the class. Include: your full name; where you are from and your undergraduate major; something interesting about yourself; a brief overview of your research interests or summer project; and a bridge into your plans for the future. No longer than three minutes. Rubric (10 pts): 3 pts organization/clarity, 2 pts delivery/introduction, 5 pts follows directives and shows genuine reflection.",
+  },
+  {
+    label: "Chem problem set",
+    course: "CHEM 151 — General Chemistry I",
+    title: "Problem Set 4: Stoichiometry",
+    description: "Complete problems 1–10: balance each chemical equation, identify the limiting reagent, and calculate theoretical and percent yield. Show all work including unit conversions. Due Friday, 20 points.",
+  },
+  {
+    label: "History source analysis",
+    course: "HIST 160 — American History Since 1877",
+    title: "Primary Source Analysis: The Populist Platform",
+    description: "Read the 1892 Omaha Platform of the Populist Party. Write a 500-word analysis explaining what economic and political conditions produced the platform, what its authors wanted, and whether their demands were radical for their time. Cite specific passages. 15 points.",
+  },
+  {
+    label: "Math homework",
+    course: "MATH 112 — College Algebra",
+    title: "Homework 6: Quadratic Functions",
+    description: "Complete problems 1–8: for each quadratic function, find the vertex, axis of symmetry, and x-intercepts; state whether the parabola opens up or down and why; and sketch the graph. Problem 8 is an application: a ball is thrown upward with height h(t) = -16t² + 48t + 4. Find the maximum height and when it occurs. Show all work. Due Wednesday, 20 points.",
+  },
+  {
+    label: "IDS community project",
+    course: "IDS — Interdisciplinary Studies",
+    title: "Signature Project: Housing Insecurity in Tucson (YOTO)",
+    description: "Create an infographic or media item (Instagram post/reel, TikTok video infosheet, flyer, or tweet thread) about housing insecurity in Tucson, AZ. We have partnered with Tucson community organization Youth On Their Own (YOTO); they have asked us to produce public-facing material that helps explain why Tucson is facing a housing crisis. They may use what we make on their social media or in their advocacy efforts, so this assignment offers real-world application for interdisciplinary research that impacts a local community. During weeks 2-6 you will study scholarly work, reports, journalism, and other media to develop your project.",
+  },
+  {
+    label: "English essay draft",
+    course: "ENGL 101 — First-Year Composition",
+    title: "Essay 2: Argumentative Essay Draft",
+    description: "Write a 1,000-word argumentative essay on a local or campus issue of your choice. Your essay must have a clear, debatable thesis, at least three supporting points with evidence, one addressed counterargument, and MLA formatting. Draft due Monday for peer review. 25 points.",
+  },
+];
+
+const STEPS = ["Read", "Design", "Generate", "Review", "Student", "Transcript"];
+
+// ─── SHARED UI ───────────────────────────────────────────────────────
+const label = { fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: UA.textMuted, marginBottom: 6 };
+const cardStyle = { background: UA.card, border: `1px solid ${UA.border}`, borderRadius: 12, padding: 20 };
+
+function IcapBadge({ level, small }) {
+  const c = ICAP_COLORS[level] || ICAP_COLORS.Passive;
+  return (
+    <span style={{
+      display: "inline-block", padding: small ? "2px 8px" : "4px 12px",
+      borderRadius: 999, background: c.bg, border: `1px solid ${c.border}`,
+      color: c.text, fontSize: small ? 11 : 13, fontWeight: 700,
+    }}>{level}</span>
+  );
+}
+
+function Stepper({ current }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginBottom: 24 }}>
+      {STEPS.map((s, i) => {
+        const done = i < current, active = i === current;
+        return (
+          <div key={s} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <div style={{
+              display: "flex", alignItems: "center", gap: 6, padding: "5px 12px", borderRadius: 999,
+              background: active ? UA.navy : done ? UA.navyLight : "transparent",
+              border: `1px solid ${active ? UA.navy : done ? UA.navyBorder : UA.border}`,
+              color: active ? "#fff" : done ? UA.navy : UA.textMuted,
+              fontSize: 12, fontWeight: 600,
+            }}>
+              <span style={{ fontSize: 10, fontWeight: 800 }}>{done ? "✓" : i + 1}</span>{s}
+            </div>
+            {i < STEPS.length - 1 && <div style={{ width: 14, height: 1, background: UA.borderStrong }} />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── API HELPERS ─────────────────────────────────────────────────────
+async function callClaude(system, messages) {
+  let response;
+  try {
+    response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, system, messages }),
+    });
+  } catch (e) {
+    throw new Error("NETWORK: Can't reach the AI service — check your internet connection and try again.");
+  }
+  if (!response.ok) {
+    throw new Error("API: The AI service returned an error (" + response.status + "). Try again in a moment.");
+  }
+  const data = await response.json();
+  if (!data.content || !data.content.length) {
+    throw new Error("API: Empty response from the AI service. Try again.");
+  }
+  return data.content.map((i) => (i.type === "text" ? i.text : "")).filter(Boolean).join("\n");
+}
+
+function parseJSON(text) {
+  const clean = text.replace(/```json|```/g, "").trim();
+  const start = clean.indexOf("{");
+  const end = clean.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error("PARSE: The AI response was cut off or malformed. Hit the button again — this usually works on retry.");
+  }
+  try {
+    return JSON.parse(clean.slice(start, end + 1));
+  } catch (e) {
+    throw new Error("PARSE: The AI response came back incomplete. Retry the generation.");
+  }
+}
+
+// ─── VOICE HELPERS ───────────────────────────────────────────────────
+const SR = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+
+function speak(text) {
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 1.02; u.pitch = 1;
+    window.speechSynthesis.speak(u);
+  } catch (e) { /* TTS unavailable — fail silently */ }
+}
+function stopSpeaking() {
+  try { window.speechSynthesis.cancel(); } catch (e) {}
+}
+
+// ─── MAIN APP ────────────────────────────────────────────────────────
+export default function AIMyAssignment() {
+  const [phase, setPhase] = useState("setup");
+  const [assignment, setAssignment] = useState(SAMPLES[0]);
+  const [gen, setGen] = useState(null);
+  const [error, setError] = useState(null);
+  const [genStep, setGenStep] = useState(0);
+  const [chat, setChat] = useState([]);
+  const [input, setInput] = useState("");
+  const [aiTyping, setAiTyping] = useState(false);
+  const [summary, setSummary] = useState(null);
+  const [voiceOn, setVoiceOn] = useState(false);      // AI replies read aloud
+  const [listening, setListening] = useState(false);   // mic dictation active
+  const [micError, setMicError] = useState(null);
+  const [progress, setProgress] = useState([]);        // one boolean per challenge
+  const [complete, setComplete] = useState(false);     // all challenges cleared
+  const [primerOpen, setPrimerOpen] = useState(true);  // pre-flight briefing, open by default (now 2-3 sentences)
+  const [scopeOpen, setScopeOpen] = useState(false);   // instructor scope controls, collapsed by default
+  const [boardAssign, setBoardAssign] = useState({});  // item -> column index
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [boardShared, setBoardShared] = useState(false);
+  const [nodes, setNodes] = useState([]);              // artifact chain: content per node, null until locked
+  const [newChallenge, setNewChallenge] = useState(""); // instructor add-a-challenge input
+  const [durationMin, setDurationMin] = useState(null); // session length at submit
+  const sessionStartRef = useRef(null);
+  const chatEndRef = useRef(null);
+  const recogRef = useRef(null);
+  const inputRef = useRef("");
+  inputRef.current = input;
+
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chat, aiTyping]);
+  useEffect(() => () => { stopSpeaking(); try { recogRef.current?.stop(); } catch (e) {} }, []);
+
+  // ── Voice input (Web Speech API — browser native, no keys) ──
+  const toggleMic = () => {
+    setMicError(null);
+    if (!SR) { setMicError("Voice input isn't supported in this browser — try Chrome or Edge."); return; }
+    if (listening) { try { recogRef.current?.stop(); } catch (e) {} setListening(false); return; }
+    try {
+      const r = new SR();
+      r.lang = "en-US"; r.continuous = true; r.interimResults = false;
+      r.onresult = (ev) => {
+        let addition = "";
+        for (let i = ev.resultIndex; i < ev.results.length; i++) {
+          if (ev.results[i].isFinal) addition += ev.results[i][0].transcript;
+        }
+        if (addition) setInput((prev) => (prev ? prev + " " : "") + addition.trim());
+      };
+      r.onerror = (ev) => {
+        setListening(false);
+        setMicError(ev.error === "not-allowed"
+          ? "Microphone access was blocked — allow mic permission and try again."
+          : "Voice input hit a snag (" + ev.error + "). You can keep typing.");
+      };
+      r.onend = () => setListening(false);
+      recogRef.current = r;
+      r.start();
+      setListening(true);
+    } catch (e) {
+      setMicError("Couldn't start voice input in this environment. Typing still works.");
+    }
+  };
+
+  // ── STEP 1–3: Read → Route → Generate ──
+  const runGeneration = async () => {
+    setError(null); setPhase("generating"); setGenStep(0);
+    const tick = setInterval(() => setGenStep((s) => Math.min(s + 1, 2)), 2500);
+    try {
+      const system = `You are the "AI My Assignment" engine inside CATS Academic Companion, built on the 70/30 Learning Model (students own 70% of cognitive work; AI provides 30% structure) and the ICAP framework (Chi & Wylie: Passive < Active < Constructive < Interactive).
+
+Given a course assignment:
+
+1. READ: identify learning objective, deliverable, academic discipline, current ICAP level.
+
+2. The redesign is ALWAYS a complete, submittable assignment — the dialogue and the artifact the student builds ARE the submission. The professor alone decides (via their controls) whether it replaces the original, complements it, or serves as added evidence. Never make that call for them; just produce one strong self-contained AI assignment.
+
+3. CLASSIFY the transformation type, calibrated to discipline:
+- Hard sciences / math: "Progressive Challenge" — student commits to an answer AND reasoning before any feedback; predict-then-test; mechanism and units questions; escalating difficulty.
+- History / social sciences: "Skeptic Dialogue" — demand evidence, sourcing, and causation; pose counterfactuals ("would the platform exist without the 1893 depression?").
+- English / literature analysis: "Skeptic Dialogue" — defend interpretations with specific textual evidence; AI offers rival readings to test against.
+- Writing / composition: interrogate thesis, structure, audience, counterargument. NEVER supply prose, sentences, or phrasing — the student's own writing stays theirs.
+- Speeches / applied / professional: "Applied Case" — AI role-plays the realistic counterpart (conference scholar, skeptical audience member, client) and the student reasons INTO the scenario.
+
+The design must be shortcut-resistant: it unfolds turn by turn in response to the student's own thinking, so there is nothing to paste into a chatbot.
+
+EFFORT PARITY (hard constraint): The redesign must require LESS OR EQUAL student time and complexity than the original — target 15-25 minutes total. Prefer 2-3 challenges, plain language, short prompts. A board task, if used, gets one board with at most 10 items. Never add steps, jargon, or complexity the original didn't have. Succinct beats thorough.
+
+REAL-WORLD ANCHOR (core requirement, every redesign): The student must finish knowing not just the content but where it is actually USED. Ground the scenario in an authentic situation where this knowledge earns its keep — an engineer sizing a structure, a nurse checking a dose, a trainer programming a load, an analyst reading a trend, an advisor counseling a leader, a consumer making a real decision. At least ONE node must require applying the concept to a concrete real situation, not just explaining it. For math and science this is non-negotiable: quadratics are projectile paths and profit curves, stoichiometry is dosing and scaling — never leave the content abstract. The student should leave able to answer "when would I actually use this?" because they just did.
+
+Respond with ONLY a JSON object, no markdown fences, no preamble. BE CONCISE — total under 600 tokens. Strict field limits:
+{
+  "objective": "one sentence",
+  "deliverable": "one phrase",
+  "discipline": "2-3 word label",
+  "currentICAP": "Passive|Active|Constructive|Interactive",
+  "currentRationale": "one short sentence",
+  "targetICAP": "Constructive|Interactive",
+  "transformationType": "the chosen type",
+  "transformationRationale": "max 2 short sentences",
+  "newTitle": "engaging, student-facing name for this experience. When a scenario is used, name the SCENE: 'Emergency Meeting of the Roman Senate', 'The YOTO Pitch Room', 'The Causal Pressure Map'.",
+  "primer": "max 70 words, student-facing briefing on the core principle needed for this assignment. CONVERSATIONAL register — write like a sharp coach, not a textbook. Any technical term gets a five-word plain gloss in-line. END with one plain sentence naming where this knowledge shows up in real life or real work. Ground it strictly in the provided course material if any was given, otherwise general expert knowledge.",
+  "primerSource": "instructor|ai — 'instructor' only if course material was provided and the primer is grounded in it",
+  "studentIntro": "2 sentences. When a scenario is used, put the STUDENT in role with stakes ('You are an advisor to the Emperor in Rome's final years — the empire's survival depends on your recommendations'). State that their live reasoning locks each block of the diagram on their screen, and that the completed work is their submission.",
+  "systemPrompt": "max 100 words. SCENARIO FRAMING is the default whenever content allows: cast the STUDENT in a role with real stakes (advisor to the Emperor, consultant to the nonprofit, engineer on deadline) and cast YOURSELF as the in-world counterpart with a stake in their answers (the Emperor demanding counsel, the skeptical editor, the client). Name the actual concepts/sources/skills of this assignment. Force specific data, mechanisms, or evidence before locking a node; never provide answers or draft sentences. Move sequentially from node 1 to the end.",
+  "challenges": ["3-4 concise phase labels matching the artifact nodes exactly, so the UI can display a progress checklist"],
+  "openingMessage": "max 50 words: warm, content-focused greeting that references the primer briefing and immediately prompts the student to populate the FIRST empty layer of the diagram on their screen. Ends with one generative question.",
+  "buildTask": null,
+  "artifact": null
+}
+For "buildTask": when the assignment involves comparing, categorizing, sequencing, or personal-inventory work (diet comparisons, classifications, sorting concepts, before/after states), replace null with {"title": "short board title", "prompt": "one sentence telling the student what to build and that it should reflect THEIR reality", "columns": ["2-3 column names"], "items": ["8-12 short items to place"]}. The student builds the board on screen, shares it into the conversation, and your challenges then interrogate WHY they placed items as they did — the placement reasoning is the generative work.
+
+For "artifact" (the DEFAULT — use it whenever the assignment has any underlying structure: an argument, a causal story, a process, a solution path): replace null with {"title": "engaging student-facing name for the visual artifact, e.g. 'The Causal Pressure Map' or 'The Populist Pressure Timeline'", "shape": "chain|timeline", "nodes": [{"label": "node name (2-4 words), e.g. 'Systemic Catalyst' or 'Baseline Intake'", "hint": "max 8 words: what content belongs in this structural layer", "marker": "optional short axis label — a year ('1892'), a step ('Step 2'), a stage — include for timeline shape, omit for chain"}]}.
+
+SHAPE SELECTION — pick what makes the content exciting to fill:
+- "timeline" for anything historical, sequential, or process-driven — this is the DEFAULT for history and any content with dates or stages: the student fills a horizontal timeline era by era, each block popping locked as they defend it. Always use year/stage markers.
+- "chain" for causal arguments, logic structures, and solution paths: a vertical cause-and-effect map.
+Choose the shape a student would actually WANT to complete — this should feel like claiming territory on a game board, not filling a form.
+
+ARTIFACT SKELETON DESIGN — think educational coloring book or blank infographic dashboard. The student does not write prose; they unlock and populate a structural diagram block by block by defending their reasoning to you live. Rules:
+1. EXACTLY 3 or 4 nodes. Total conversation must take 15-20 minutes — match or beat the time the original assignment would take.
+2. COMPLETELY STRIPPED PROSE: nodes are structural pillars, not paragraphs. Think spatially — each node is a separate room or color zone in the final infographic that the student claims with their own logic.
+3. The nodes together form the SKELETON of the original deliverable — the hard thinking the student must finish before they could ever make it.
+4. DISCIPLINE CALIBRATION & MODAL AWARENESS of the node set:
+   - Science / nutrition / health: inputs → variance from guidelines → real-world friction metrics → concrete micro-swaps.
+   - Humanities / social sciences: foundational pressures → historical flashpoints → human/demographic impact → modern systemic parallel or solution.
+   - Math / applied problem sets: given → method chosen and why → solution → what it means in a REAL context (finance, sports performance, engineering, medicine — name the actual use).
+   - Composition / argument: thesis → strongest support → best counterargument → rebuttal.
+   - Performance / applied (PREPARATION mode — speeches, presentations, defenses): structural beats → audience delivery arc → evidence drops → transition anchors.
+5. "transformationType" should read "Framework Blueprint" when an artifact is used.
+
+Use buildTask OR artifact, not both — artifact is the default; buildTask only for sorting/inventory tasks. If neither genuinely fits, keep both null. When artifact is present, make "challenges" match the node labels exactly. Total response under 750 tokens.`;
+      const systemB = `You are the "AI My Assignment" engine (pass 2 of 2). Given the original assignment, optional course material, and the approved redesign details, produce the grading materials. Respond with ONLY a JSON object, no fences, no preamble, total under 420 tokens:
+{
+  "skillsPreserved": ["4-5 short skill labels the ORIGINAL assignment practices (e.g., historical analysis, using evidence, organizing an argument) — every one must still be exercised in the redesign"],
+  "workloadNote": "one sentence stating estimated student workload vs the original, e.g. 'Comparable to the original 500-word essay: roughly 15-20 minutes of focused reasoning.'",
+  "successCriteria": ["3 short bullets: what the instructor should look for in the transcript"],
+  "rubricMapping": [{"criterion": "if the original assignment includes a rubric, use ITS criteria and point values verbatim; otherwise infer 3-4 criteria that fit the stated points", "points": "number or short string", "evidence": "max 12 words: where this criterion's evidence appears in the dialogue transcript or completed artifact. If a criterion genuinely CANNOT be assessed in this modality (e.g., MLA formatting, live delivery), set evidence to exactly 'NOT ASSESSABLE in this modality — instructor decides' rather than inventing a mapping"}]
+}`;
+      const materialBlock = (assignment.material || "").trim()
+        ? `\nCourse material provided by instructor (ground the primer and challenges in THIS framing):\n${assignment.material.trim().slice(0, 3500)}`
+        : "\nNo course material provided — draft the primer from general knowledge and set primerSource to 'ai'.";
+      const askJSON = async (sys, userContent) => {
+        try {
+          return parseJSON(await callClaude(sys, [{ role: "user", content: userContent }]));
+        } catch (e1) {
+          // One automatic retry — truncation and transient errors usually clear on a second attempt
+          return parseJSON(await callClaude(sys, [{ role: "user", content: userContent }]));
+        }
+      };
+      const baseContent = `Course: ${assignment.course}\nAssignment title: ${assignment.title}\nAssignment description: ${assignment.description}${materialBlock}`;
+      const core = await askJSON(system, baseContent);
+      const support = await askJSON(systemB, `${baseContent}\n\nApproved redesign: mode=${core.mode}; transformation=${core.transformationType}; challenges=${(core.challenges || []).join(" | ")}`);
+      clearInterval(tick);
+      setGen({ ...core, ...support });
+      setPhase("review");
+    } catch (err) {
+      clearInterval(tick);
+      console.error("Generation error:", err);
+      const msg = (err.message || "").replace(/^(NETWORK|API|PARSE): /, "");
+      setError(msg || "Generation failed — try again.");
+      setPhase("setup");
+    }
+  };
+
+  // ── STEP 5: student dialogue ──
+  const deployToStudent = () => {
+    const n = Array.isArray(gen.challenges) && gen.challenges.length ? gen.challenges.length : 3;
+    setProgress(new Array(n).fill(false));
+    setComplete(false);
+    setBoardAssign({}); setSelectedItem(null); setBoardShared(false);
+    setNodes(gen.artifact ? new Array(gen.artifact.nodes.length).fill(null) : []);
+    setDurationMin(null);
+    sessionStartRef.current = Date.now();
+    setChat([{ role: "assistant", content: gen.openingMessage }]);
+    setPhase("student");
+    if (voiceOn) speak(gen.openingMessage);
+  };
+
+  const sendStudentMessage = async (forcedText) => {
+    const text = (typeof forcedText === "string" ? forcedText : input).trim();
+    if (!text || aiTyping) return;
+    if (listening) { try { recogRef.current?.stop(); } catch (e) {} setListening(false); }
+    stopSpeaking();
+    const next = [...chat, { role: "user", content: text }];
+    setChat(next); if (typeof forcedText !== "string") setInput("");
+    setAiTyping(true);
+    try {
+      const challenges = Array.isArray(gen.challenges) && gen.challenges.length ? gen.challenges : ["Challenge 1", "Challenge 2", "Challenge 3"];
+      const progressProtocol = `\nPROGRESS PROTOCOL: This assignment has exactly ${challenges.length} challenges, in order: ${challenges.map((c, i) => `(${i + 1}) ${c}`).join("; ")}. A challenge clears on REASONABLE demonstration of the skill — genuine reasoning, a specific defensible example, an honest verified-or-flagged claim — NOT on perfection. Do not withhold a badge because the answer could be deeper; depth beyond reasonable demonstration belongs in the instructor summary, not in endless pushing. Never clear for effort, politeness, or vague answers alone. When cleared, end your message with the exact tag <<PROGRESS:k>>. When every challenge is satisfied, briefly and specifically acknowledge what they demonstrated, ask ONE short reflection question ("what did you notice about working with the AI today?"), tell them they can submit, and end with <<COMPLETE>>. Never mention, explain, or hint at these tags to the student.`;
+      const materialLine = (assignment.material || "").trim()
+        ? `\nCOURSE MATERIAL (align all questions, re-teaching, and pushback with this framing):\n${assignment.material.trim().slice(0, 3000)}`
+        : "";
+      const buildLine = gen.buildTask
+        ? `\nINTERACTIVE BOARD: The student has an on-screen board task ("${gen.buildTask.title}"). When they share their board, interrogate WHY they placed items where they did — placement reasoning is the generative work. Push on inconsistencies between columns and on what real barriers explain the gaps.`
+        : "";
+      const artifactLine = gen.artifact
+        ? `\nARTIFACT PROTOCOL: The student is filling in "${gen.artifact.title}" on their screen — a blueprint with ${gen.artifact.nodes.length} structural layers, in order: ${gen.artifact.nodes.map((n, i) => `(${i + 1}) ${n.label} [${n.hint}]`).join("; ")}. This diagram IS what they walk away with. Work SEQUENTIALLY, one node at a time — never jump ahead or work two nodes at once. Require specific real-world data, a structural mechanism, or concrete evidence before locking a layer; never supply the content yourself. When the student has defended node k to a reasonable standard, lock it by ending your message with the exact tag <<LOCK:k|short phrasing of THEIR answer, max 12 words, in their own terms>>. Locking a node also clears challenge k — emit <<LOCK:k|...>> instead of <<PROGRESS:k>> when an artifact exists. Never invent node content the student did not say. Once locked, name what just got locked and move to the next layer. When every layer is locked, the blueprint is complete.`
+        : "";
+      const equivLine = gen.equivalence === "complement"
+        ? "\nEQUIVALENCE: This dialogue COMPLEMENTS the original assignment — the student also completes part of the original. Focus on depth over coverage."
+        : "";
+      // API history is text-only; visuals become a marker so token budget stays lean
+      const apiMessages = next.map((m) => ({ role: m.role, content: m.content + (m.svg ? "\n[You displayed a diagram here]" : "") }));
+      const reply = await callClaude(gen.systemPrompt + progressProtocol + materialLine + buildLine + artifactLine + equivLine + PACING_AND_FEEL + AI_LITERACY_LAYER + VISUALS_PROTOCOL + "\n" + HARD_GUARDRAILS, apiMessages);
+      // Parse and strip progress tags
+      const newProg = [...progress];
+      const tagRe = /<<PROGRESS:(\d+)>>/g;
+      let tagMatch;
+      while ((tagMatch = tagRe.exec(reply)) !== null) {
+        const idx = parseInt(tagMatch[1], 10) - 1;
+        if (idx >= 0 && idx < newProg.length) newProg[idx] = true;
+      }
+      // Parse artifact node locks
+      const newNodes = [...nodes];
+      const lockRe = /<<LOCK:(\d+)\|([^>]*)>>/g;
+      let lockMatch;
+      while ((lockMatch = lockRe.exec(reply)) !== null) {
+        const idx = parseInt(lockMatch[1], 10) - 1;
+        const content = (lockMatch[2] || "").trim();
+        if (idx >= 0 && idx < newNodes.length && content) {
+          newNodes[idx] = content;
+          if (idx < newProg.length) newProg[idx] = true;
+        }
+      }
+      setNodes(newNodes);
+      let nowComplete = complete;
+      const artifactDone = gen.artifact && newNodes.length > 0 && newNodes.every(Boolean);
+      if (/<<COMPLETE>>/.test(reply) || artifactDone) { nowComplete = true; newProg.fill(true); }
+      let working = reply.replace(/<<PROGRESS:\d+>>/g, "").replace(/<<LOCK:\d+\|[^>]*>>/g, "").replace(/<<COMPLETE>>/g, "");
+      // Extract inline visual, if any
+      let svg = null;
+      const visMatch = working.match(/<<VISUAL>>([\s\S]*?)<<\/VISUAL>>/);
+      if (visMatch) {
+        svg = sanitizeSvg(visMatch[1]);
+        working = working.replace(/<<VISUAL>>[\s\S]*?<<\/VISUAL>>/g, "");
+      }
+      // Handle a truncated/unclosed visual block gracefully
+      working = working.replace(/<<VISUAL>>[\s\S]*$/g, "");
+      const cleanReply = working.trim();
+      setProgress(newProg);
+      setComplete(nowComplete);
+      setChat((c) => [...c, { role: "assistant", content: cleanReply, svg }]);
+      if (voiceOn) speak(cleanReply);
+    } catch (err) {
+      const isNetwork = (err.message || "").startsWith("NETWORK");
+      setChat((c) => [...c, { role: "assistant", content: isNetwork
+        ? "(Connection lost — check your internet, then send your message again. Your conversation is saved.)"
+        : "(The AI hiccuped — send that again.)" }]);
+    }
+    setAiTyping(false);
+  };
+
+  // ── STEP 6: instructor summary ──
+  const endSession = async () => {
+    stopSpeaking();
+    if (listening) { try { recogRef.current?.stop(); } catch (e) {} setListening(false); }
+    const mins = sessionStartRef.current ? Math.max(1, Math.round((Date.now() - sessionStartRef.current) / 60000)) : null;
+    setDurationMin(mins);
+    setPhase("summarizing");
+    try {
+      const transcript = chat.map((m) => (m.role === "user" ? "STUDENT: " : "AI: ") + m.content + (m.svg ? " [displayed a diagram]" : "")).join("\n\n");
+      const artifactNote = gen.artifact && nodes.some(Boolean)
+        ? `\nArtifact built: ${gen.artifact.title} — ${gen.artifact.nodes.map((n, i) => `${n.label}: ${nodes[i] || "(not established)"}`).join(" → ")}`
+        : "";
+      const boardNote = gen.buildTask && boardShared
+        ? `\nBoard artifact submitted: ${gen.buildTask.title} — ${gen.buildTask.columns.map((col, ci) => `${col}: ${Object.keys(boardAssign).filter((k) => boardAssign[k] === ci).join(", ") || "(empty)"}`).join(" | ")}`
+        : "";
+      const raw = await callClaude(
+        `You are generating an instructor-facing session summary for a completed AI assignment. The dialogue and any artifact the student built ARE the submission — assess the generative work. Analyze the student's thinking. Respond with ONLY JSON, no fences:
+{
+  "engagementLevel": "Passive|Active|Constructive|Interactive — the level the STUDENT actually demonstrated",
+  "reasonedWell": ["2-3 specific moments of genuine understanding or defended claims"],
+  "struggled": ["1-3 specific gaps, vague claims, or avoided challenges"],
+  "recommendation": "2 sentences for the instructor: what to follow up on"
+}`,
+        [{ role: "user", content: `Assignment: ${gen.newTitle}\nObjective: ${gen.objective}\nSession duration: ${mins ? mins + " minutes" : "unknown"}\nStudent turns: ${chat.filter((m) => m.role === "user").length}\nCompletion status: ${complete ? "COMPLETE — all challenges cleared" : `INCOMPLETE — ${progress.filter(Boolean).length} of ${progress.length} challenges cleared at submission`}${artifactNote}${boardNote}\n\nTranscript:\n${transcript}` }]
+      );
+      setSummary(parseJSON(raw));
+    } catch (err) {
+      setSummary({ engagementLevel: "—", reasonedWell: [], struggled: [], recommendation: "Summary generation failed — transcript is still available below." });
+    }
+    setPhase("summary");
+  };
+
+  const reset = () => { stopSpeaking(); setPhase("setup"); setGen(null); setChat([]); setSummary(null); setError(null); setMicError(null); setProgress([]); setComplete(false); setPrimerOpen(true); setScopeOpen(false); setBoardAssign({}); setSelectedItem(null); setBoardShared(false); setNodes([]); setNewChallenge(""); setDurationMin(null); };
+
+  const currentStep = { setup: 0, generating: genStep, review: 3, student: 4, summarizing: 5, summary: 5 }[phase];
+
+  // ─── RENDER ────────────────────────────────────────────────────────
+  return (
+    <div style={{ minHeight: "100vh", background: UA.bg, fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif", color: UA.text }}>
+      <div style={{ background: UA.navy, padding: "16px 28px", display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 19, fontWeight: 800, color: "#fff", letterSpacing: "-0.01em" }}>
+          <span style={{ color: "#FF4D6D" }}>AI</span> My Assignment
+        </div>
+        <div style={{ fontSize: 12, color: "#9FB3D1" }}>CATS Academic Companion · Instructor Redesign Engine · v2</div>
+      </div>
+
+      <div style={{ maxWidth: phase === "student" ? 1140 : 860, margin: "0 auto", padding: "28px 20px 60px" }}>
+        <Stepper current={currentStep} />
+
+        {/* ══ SETUP ══ */}
+        {phase === "setup" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {SAMPLES.map((s) => (
+                <button key={s.label} onClick={() => setAssignment(s)}
+                  style={{
+                    padding: "7px 14px", borderRadius: 999, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                    background: assignment.label === s.label ? UA.navy : UA.card,
+                    color: assignment.label === s.label ? "#fff" : UA.navy,
+                    border: `1px solid ${assignment.label === s.label ? UA.navy : UA.navyBorder}`,
+                  }}>
+                  {s.label}
+                </button>
+              ))}
+            </div>
+            <div style={cardStyle}>
+              <div style={label}>Original Assignment (paste any assignment here)</div>
+              <input
+                value={assignment.course}
+                onChange={(e) => setAssignment({ ...assignment, course: e.target.value, label: "custom" })}
+                style={{ width: "100%", boxSizing: "border-box", padding: "9px 12px", border: `1px solid ${UA.border}`, borderRadius: 8, fontSize: 13, fontWeight: 600, marginBottom: 8, color: UA.navy }}
+              />
+              <input
+                value={assignment.title}
+                onChange={(e) => setAssignment({ ...assignment, title: e.target.value, label: "custom" })}
+                style={{ width: "100%", boxSizing: "border-box", padding: "9px 12px", border: `1px solid ${UA.border}`, borderRadius: 8, fontSize: 14, fontWeight: 700, marginBottom: 8 }}
+              />
+              <textarea
+                value={assignment.description}
+                onChange={(e) => setAssignment({ ...assignment, description: e.target.value, label: "custom" })}
+                rows={6}
+                style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `1px solid ${UA.border}`, borderRadius: 8, fontSize: 14, lineHeight: 1.6, fontFamily: "Georgia, serif", color: UA.textSec, resize: "vertical" }}
+              />
+            </div>
+            <div style={cardStyle}>
+              <div style={label}>Course Material (optional — recommended)</div>
+              <div style={{ fontSize: 12, color: UA.textMuted, marginBottom: 8, lineHeight: 1.5 }}>
+                Paste lecture notes, slide text, or a reading excerpt. The engine builds the student's pre-work review from YOUR material and keeps the AI's questions aligned with how you taught it. Left blank, the AI drafts a primer from general knowledge — flagged for your verification.
+              </div>
+              <textarea
+                value={assignment.material || ""}
+                onChange={(e) => setAssignment({ ...assignment, material: e.target.value, label: "custom" })}
+                rows={4}
+                placeholder="e.g., key points from Tuesday's lecture, the slide outline, or the assigned passage…"
+                style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `1px solid ${UA.border}`, borderRadius: 8, fontSize: 13.5, lineHeight: 1.6, color: UA.textSec, resize: "vertical" }}
+              />
+            </div>
+            {error && (
+              <div style={{ ...cardStyle, background: UA.redLight, borderColor: UA.redBorder, color: UA.redDark, fontSize: 13 }}>{error}</div>
+            )}
+            <button
+              onClick={runGeneration}
+              style={{ alignSelf: "flex-start", background: UA.red, color: "#fff", border: "none", borderRadius: 10, padding: "13px 26px", fontSize: 15, fontWeight: 800, cursor: "pointer", boxShadow: "0 2px 8px rgba(204,0,51,0.25)" }}
+            >
+              ✨ AI My Assignment
+            </button>
+            <div style={{ fontSize: 12, color: UA.textMuted, maxWidth: 640, lineHeight: 1.5 }}>
+              The engine reads any assignment, designs a discipline-calibrated interactive version a student completes by reasoning through it — building a visual artifact block by block — with 70/30 guardrails encoded. You review, adjust scope, and approve; the completed work is the student's submission.
+            </div>
+          </div>
+        )}
+
+        {/* ══ GENERATING ══ */}
+        {phase === "generating" && (
+          <div style={{ ...cardStyle, textAlign: "center", padding: 48 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: UA.navy, marginBottom: 18 }}>
+              {["Reading the assignment — objective, deliverable, discipline, ICAP level…", "Designing the scenario and artifact — calibrating to the discipline…", "Generating the interactive assignment with guardrails encoded…"][genStep]}
+            </div>
+            <div style={{ display: "flex", justifyContent: "center", gap: 8 }}>
+              {[0, 1, 2].map((i) => (
+                <div key={i} style={{ width: 10, height: 10, borderRadius: "50%", background: i <= genStep ? UA.red : UA.border, transition: "background 0.4s" }} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ══ REVIEW ══ */}
+        {phase === "review" && gen && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ ...cardStyle, display: "flex", alignItems: "center", justifyContent: "center", gap: 18, padding: 28, flexWrap: "wrap" }}>
+              <div style={{ textAlign: "center" }}>
+                <div style={label}>Original</div>
+                <IcapBadge level={gen.currentICAP} />
+              </div>
+              <div style={{ fontSize: 26, color: UA.red, fontWeight: 800 }}>→</div>
+              <div style={{ textAlign: "center" }}>
+                <div style={label}>Redesigned</div>
+                <IcapBadge level={gen.targetICAP} />
+              </div>
+              <div style={{ borderLeft: `1px solid ${UA.border}`, paddingLeft: 18, maxWidth: 300, fontSize: 12.5, color: UA.textSec, lineHeight: 1.5 }}>
+                {gen.currentRationale}
+              </div>
+            </div>
+
+            {/* Routing decision — the v2 signature */}
+            {/* Scenario summary */}
+            <div style={{ ...cardStyle, borderLeft: `4px solid ${UA.red}`, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+              <span style={{ display: "inline-block", padding: "4px 12px", borderRadius: 999, background: UA.redLight, border: `1px solid ${UA.redBorder}`, color: UA.redDark, fontSize: 12, fontWeight: 800 }}>
+                {gen.transformationType || "Interactive Assignment"}
+              </span>
+              <div style={{ fontSize: 13, color: UA.textSec, lineHeight: 1.55, flex: 1, minWidth: 240 }}>
+                <b style={{ color: UA.text }}>The completed work is the student's submission.</b>{" "}
+                <span style={{ color: UA.textMuted }}>Discipline: {gen.discipline}</span>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16 }}>
+              <div style={cardStyle}>
+                <div style={label}>What the AI read</div>
+                <div style={{ fontSize: 13, lineHeight: 1.6, color: UA.textSec }}>
+                  <b style={{ color: UA.text }}>Objective:</b> {gen.objective}<br />
+                  <b style={{ color: UA.text }}>Deliverable:</b> {gen.deliverable}
+                </div>
+              </div>
+              <div style={cardStyle}>
+                <div style={label}>Transformation</div>
+                <div style={{ fontSize: 14, fontWeight: 800, color: UA.navy, marginBottom: 6 }}>{gen.transformationType}</div>
+                <div style={{ fontSize: 13, lineHeight: 1.6, color: UA.textSec }}>{gen.transformationRationale}</div>
+                {Array.isArray(gen.skillsPreserved) && gen.skillsPreserved.length > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", color: UA.textMuted, marginBottom: 5 }}>Skills preserved</div>
+                    <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                      {gen.skillsPreserved.map((s, i) => (
+                        <span key={i} style={{ padding: "3px 9px", borderRadius: 999, fontSize: 11.5, fontWeight: 700, background: UA.greenBg, border: `1px solid ${UA.greenBorder}`, color: UA.green }}>✓ {s}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {gen.workloadNote && (
+                  <div style={{ marginTop: 8, fontSize: 12, color: UA.textSec, fontStyle: "italic" }}>⏱ {gen.workloadNote}</div>
+                )}
+              </div>
+            </div>
+
+            <div style={{ ...cardStyle, borderLeft: `4px solid ${UA.red}` }}>
+              <div style={label}>Student sees</div>
+              <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 6 }}>{gen.newTitle}</div>
+              <div style={{ fontSize: 13.5, lineHeight: 1.6, color: UA.textSec }}>{gen.studentIntro}</div>
+            </div>
+
+            {gen.primer && (
+              <div style={{ ...cardStyle, background: gen.primerSource === "instructor" ? UA.card : UA.amberBg, borderColor: gen.primerSource === "instructor" ? UA.border : UA.amberBorder }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+                  <div style={{ ...label, marginBottom: 0 }}>📖 Pre-work review the student sees</div>
+                  <span style={{
+                    fontSize: 10.5, fontWeight: 800, padding: "2px 8px", borderRadius: 999,
+                    background: gen.primerSource === "instructor" ? UA.greenBg : UA.amberBg,
+                    border: `1px solid ${gen.primerSource === "instructor" ? UA.greenBorder : UA.amberBorder}`,
+                    color: gen.primerSource === "instructor" ? UA.green : UA.amber,
+                  }}>
+                    {gen.primerSource === "instructor" ? "FROM YOUR COURSE MATERIAL" : "AI-DRAFTED — VERIFY BEFORE DEPLOY"}
+                  </span>
+                </div>
+                <div style={{ fontSize: 13.5, lineHeight: 1.65, color: UA.textSec }}>{gen.primer}</div>
+              </div>
+            )}
+
+            <div style={cardStyle}>
+              <div style={label}>Guardrails encoded (70/30 model)</div>
+              <div style={{ fontSize: 13, lineHeight: 1.9, color: UA.textSec }}>
+                ✕ Never writes the student's answer or deliverable &nbsp;·&nbsp; ✕ Never confirms before the student commits to reasoning &nbsp;·&nbsp; ✓ Every turn demands generation &nbsp;·&nbsp; ✓ Redirects "just tell me" &nbsp;·&nbsp; ✓ Discipline-calibrated pushback
+              </div>
+            </div>
+
+            {/* Instructor scope controls */}
+            <div style={{ ...cardStyle, borderLeft: `4px solid ${UA.amber}` }}>
+              <div onClick={() => setScopeOpen(!scopeOpen)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
+                <div style={{ ...label, marginBottom: 0 }}>⚙ Adjust scope — optional, defaults are ready to deploy</div>
+                <span style={{ fontSize: 12, fontWeight: 700, color: UA.textMuted }}>{scopeOpen ? "▲" : "▼"}</span>
+              </div>
+              {scopeOpen && (<div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: UA.text, marginBottom: 6 }}>Challenges the student must clear</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                {(gen.challenges || []).map((c, i) => (
+                  <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 999, fontSize: 12.5, fontWeight: 600, background: UA.navyLight, border: `1px solid ${UA.navyBorder}`, color: UA.navy }}>
+                    {c}
+                    {(gen.challenges || []).length > 1 && (
+                      <button onClick={() => setGen({ ...gen, challenges: gen.challenges.filter((_, j) => j !== i) })}
+                        title="Remove this challenge"
+                        style={{ background: "transparent", border: "none", cursor: "pointer", color: UA.red, fontWeight: 800, fontSize: 13, padding: 0 }}>✕</button>
+                    )}
+                  </span>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                <input value={newChallenge} onChange={(e) => setNewChallenge(e.target.value)}
+                  placeholder="Add a challenge (e.g., 'Solve one problem from the original set')"
+                  style={{ flex: 1, padding: "8px 12px", border: `1px solid ${UA.border}`, borderRadius: 8, fontSize: 13 }} />
+                <button onClick={() => { const t = newChallenge.trim(); if (t) { setGen({ ...gen, challenges: [...(gen.challenges || []), t] }); setNewChallenge(""); } }}
+                  style={{ background: UA.navy, color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>+ Add</button>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
+                <div>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: UA.text, marginBottom: 6 }}>Counts as</div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {[["full", "Full alternate — replaces the original"], ["complement", "Complement — student also does part of the original"]].map(([val, lbl]) => (
+                      <button key={val} onClick={() => setGen({ ...gen, equivalence: val })}
+                        style={{
+                          flex: 1, padding: "8px 10px", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", lineHeight: 1.4,
+                          background: (gen.equivalence || "full") === val ? UA.navy : UA.card,
+                          color: (gen.equivalence || "full") === val ? "#fff" : UA.navy,
+                          border: `1px solid ${UA.navyBorder}`,
+                        }}>{lbl}</button>
+                    ))}
+                  </div>
+                </div>
+                {gen.buildTask && (
+                  <div>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: UA.text, marginBottom: 6 }}>Submission package</div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {[["transcript+artifact", "Transcript + built artifact"], ["transcript", "Transcript only"]].map(([val, lbl]) => (
+                        <button key={val} onClick={() => setGen({ ...gen, submission: val })}
+                          style={{
+                            flex: 1, padding: "8px 10px", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", lineHeight: 1.4,
+                            background: (gen.submission || "transcript+artifact") === val ? UA.navy : UA.card,
+                            color: (gen.submission || "transcript+artifact") === val ? "#fff" : UA.navy,
+                            border: `1px solid ${UA.navyBorder}`,
+                          }}>{lbl}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              {gen.buildTask && (
+                <div style={{ marginTop: 12, fontSize: 12.5, color: UA.textSec, background: UA.navyLight, border: `1px solid ${UA.navyBorder}`, borderRadius: 8, padding: "10px 12px", lineHeight: 1.5 }}>
+                  🧩 <b style={{ color: UA.navy }}>Interactive board included:</b> "{gen.buildTask.title}" — the student builds it on screen ({gen.buildTask.columns.join(" vs. ")}), then defends every placement in dialogue.
+                </div>
+              )}
+              </div>)}
+            </div>
+
+            {gen.artifact && (
+              <div style={{ ...cardStyle, borderLeft: `4px solid ${UA.green}` }}>
+                <div style={label}>What the student walks away with</div>
+                <div style={{ fontSize: 14, fontWeight: 800, color: UA.navy, marginBottom: 4 }}>{gen.artifact.title}</div>
+                <div style={{ fontSize: 12.5, color: UA.textSec, lineHeight: 1.5, marginBottom: 10 }}>
+                  Assembled node by node through the dialogue — each one locks only when the student defends it. They leave with the artifact; you receive it alongside the transcript that shows how it was earned.
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  {gen.artifact.nodes.map((n, i) => (
+                    <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ padding: "5px 11px", borderRadius: 999, fontSize: 12, fontWeight: 700, background: UA.navyLight, border: `1px solid ${UA.navyBorder}`, color: UA.navy }}>{n.label}</span>
+                      {i < gen.artifact.nodes.length - 1 && <span style={{ color: UA.borderStrong, fontWeight: 800, fontSize: 12 }}>→</span>}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {Array.isArray(gen.rubricMapping) && gen.rubricMapping.length > 0 && (
+              <div style={{ ...cardStyle, borderLeft: `4px solid ${UA.navy}` }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                  <div style={{ ...label, marginBottom: 0 }}>One rubric, two evidence paths</div>
+                  <span style={{ fontSize: 11.5, color: UA.textMuted }}>Your criteria, unchanged — edit before deploy. Both completion paths are graded against this same rubric.</span>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 52px 1fr", gap: 10, padding: "6px 0", borderBottom: `2px solid ${UA.navy}` }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: UA.navy, textTransform: "uppercase", letterSpacing: "0.05em" }}>Criterion</span>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: UA.navy, textTransform: "uppercase", letterSpacing: "0.05em" }}>Pts</span>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: UA.navy, textTransform: "uppercase", letterSpacing: "0.05em" }}>Evidence in the transcript</span>
+                  </div>
+                  {gen.rubricMapping.map((row, i) => {
+                    const flagged = /NOT ASSESSABLE/i.test(row.evidence || "");
+                    return (
+                      <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 52px 1fr", gap: 10, padding: "8px 0", borderBottom: `1px solid ${UA.border}`, background: flagged ? UA.amberBg : "transparent" }}>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: UA.text, lineHeight: 1.5 }}>{row.criterion}</span>
+                        <span style={{ fontSize: 13, fontWeight: 800, color: UA.red }}>{row.points}</span>
+                        <span style={{ fontSize: 13, color: flagged ? UA.amber : UA.textSec, fontWeight: flagged ? 700 : 400, lineHeight: 1.5 }}>{flagged ? "⚠ " : ""}{row.evidence}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                {Array.isArray(gen.successCriteria) && gen.successCriteria.length > 0 && (
+                  <div style={{ marginTop: 10, fontSize: 12, color: UA.textMuted, lineHeight: 1.6 }}>
+                    In the transcript, look for: {gen.successCriteria.join(" · ")}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 12 }}>
+              <button onClick={deployToStudent} style={{ background: UA.navy, color: "#fff", border: "none", borderRadius: 10, padding: "13px 26px", fontSize: 14.5, fontWeight: 800, cursor: "pointer" }}>
+                Approve &amp; open Student View →
+              </button>
+              <button onClick={reset} style={{ background: "transparent", color: UA.textSec, border: `1px solid ${UA.border}`, borderRadius: 10, padding: "13px 20px", fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}>
+                Start over
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ══ STUDENT ══ */}
+        {phase === "student" && gen && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ ...cardStyle, padding: 16, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 800 }}>{gen.newTitle}</div>
+                <div style={{ fontSize: 12, color: UA.textMuted, marginTop: 3 }}>
+                  {gen.equivalence === "complement" ? "Counts alongside part of the original assignment." : "Your completed work is your submission."}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <button onClick={() => { if (voiceOn) stopSpeaking(); setVoiceOn(!voiceOn); }}
+                  title="Read AI replies aloud"
+                  style={{ background: voiceOn ? UA.navy : UA.card, color: voiceOn ? "#fff" : UA.navy, border: `1px solid ${UA.navyBorder}`, borderRadius: 8, padding: "9px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                  {voiceOn ? "🔊 Voice on" : "🔇 Voice off"}
+                </button>
+                <button onClick={endSession} disabled={chat.filter((m) => m.role === "user").length < 1}
+                  style={{ background: chat.filter((m) => m.role === "user").length < 1 ? UA.border : complete ? UA.green : UA.red, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                  {complete ? (gen.artifact ? "✓ Submit artifact + transcript" : "✓ Submit completed assignment") : "Submit early (incomplete)"}
+                </button>
+              </div>
+            </div>
+
+            <style>{`
+              .amt-session { display: grid; grid-template-columns: 1fr; gap: 14px; }
+              @media (min-width: 780px) {
+                .amt-session { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); align-items: start; }
+                .amt-dialogue { position: sticky; top: 16px; }
+              }
+            `}</style>
+            <div className="amt-session">
+              {/* LEFT COLUMN — the structural map: artifact, primer, board */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+
+            {/* The artifact, assembling live — this is what they walk away with */}
+            {gen.artifact && (
+              <div style={{ ...cardStyle, padding: 16 }}>
+                <style>{`@keyframes lockPop { 0% { transform: scale(0.5); opacity: 0.3; } 60% { transform: scale(1.18); } 100% { transform: scale(1); opacity: 1; } }`}</style>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12, flexWrap: "wrap", gap: 6 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 800, color: UA.navy }}>{gen.artifact.title}</div>
+                  <div style={{ fontSize: 11.5, color: complete ? UA.green : UA.textMuted, fontWeight: 700 }}>
+                    {complete ? "✓ Complete — this is yours to build from" : `${nodes.filter(Boolean).length} of ${nodes.length} locked in`}
+                  </div>
+                </div>
+                {gen.artifact.shape === "timeline" ? (
+                  <div style={{ overflowX: "auto", paddingBottom: 4 }}>
+                    <div style={{ display: "flex", alignItems: "stretch", minWidth: gen.artifact.nodes.length * 148 }}>
+                      {gen.artifact.nodes.map((n, i) => (
+                        <div key={i} style={{ flex: 1, minWidth: 140, padding: "0 5px" }}>
+                          <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}>
+                            <div style={{ flex: 1, height: 3, borderRadius: 2, background: i === 0 ? "transparent" : (nodes[i - 1] ? UA.green : UA.borderStrong) }} />
+                            <div style={{
+                              width: 26, height: 26, borderRadius: "50%", fontSize: 11, fontWeight: 800, flexShrink: 0,
+                              display: "flex", alignItems: "center", justifyContent: "center", color: "#fff",
+                              background: nodes[i] ? UA.green : UA.borderStrong,
+                              animation: nodes[i] ? "lockPop 0.45s ease" : "none",
+                            }}>{nodes[i] ? "✓" : i + 1}</div>
+                            <div style={{ flex: 1, height: 3, borderRadius: 2, background: i === gen.artifact.nodes.length - 1 ? "transparent" : (nodes[i] ? UA.green : UA.borderStrong) }} />
+                          </div>
+                          {n.marker && (
+                            <div style={{ textAlign: "center", fontSize: 11, fontWeight: 800, color: nodes[i] ? UA.green : UA.textMuted, marginBottom: 4 }}>{n.marker}</div>
+                          )}
+                          <div style={{
+                            borderRadius: 10, padding: "8px 10px", minHeight: 66,
+                            background: nodes[i] ? UA.greenBg : UA.bg,
+                            border: `1px solid ${nodes[i] ? UA.greenBorder : UA.border}`,
+                            animation: nodes[i] ? "lockPop 0.45s ease" : "none",
+                          }}>
+                            <div style={{ fontSize: 10.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.04em", textAlign: "center", color: nodes[i] ? UA.green : UA.textMuted }}>{n.label}</div>
+                            <div style={{ fontSize: 12.5, lineHeight: 1.45, textAlign: "center", marginTop: 3, color: nodes[i] ? UA.text : UA.textMuted, fontStyle: nodes[i] ? "normal" : "italic" }}>
+                              {nodes[i] || n.hint}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                  {gen.artifact.nodes.map((n, i) => (
+                    <div key={i}>
+                      <div style={{
+                        display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px", borderRadius: 10,
+                        background: nodes[i] ? UA.greenBg : UA.bg,
+                        border: `1px solid ${nodes[i] ? UA.greenBorder : UA.border}`,
+                        animation: nodes[i] ? "lockPop 0.45s ease" : "none",
+                      }}>
+                        <span style={{
+                          flexShrink: 0, width: 20, height: 20, borderRadius: "50%", fontSize: 11, fontWeight: 800,
+                          display: "flex", alignItems: "center", justifyContent: "center", marginTop: 1,
+                          background: nodes[i] ? UA.green : UA.borderStrong, color: "#fff",
+                        }}>{nodes[i] ? "✓" : i + 1}</span>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", color: nodes[i] ? UA.green : UA.textMuted }}>{n.label}</div>
+                          <div style={{ fontSize: 13.5, lineHeight: 1.5, color: nodes[i] ? UA.text : UA.textMuted, fontStyle: nodes[i] ? "normal" : "italic", marginTop: 2 }}>
+                            {nodes[i] || n.hint}
+                          </div>
+                        </div>
+                      </div>
+                      {i < gen.artifact.nodes.length - 1 && (
+                        <div style={{ height: 12, display: "flex", justifyContent: "center", alignItems: "center", color: nodes[i] ? UA.green : UA.borderStrong, fontSize: 11, fontWeight: 800 }}>↓</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                )}
+              </div>
+            )}
+
+            {/* Progress strip — only when there's no artifact to watch instead */}
+            {!gen.artifact && gen.challenges && gen.challenges.length > 0 && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", padding: "0 4px" }}>
+                {gen.challenges.map((c, i) => (
+                  <span key={i} style={{
+                    padding: "5px 12px", borderRadius: 999, fontSize: 12, fontWeight: 700,
+                    background: progress[i] ? UA.greenBg : UA.card,
+                    color: progress[i] ? UA.green : UA.textMuted,
+                    border: `1px solid ${progress[i] ? UA.greenBorder : UA.border}`,
+                  }}>
+                    {progress[i] ? "✓ " : `${i + 1}. `}{c}
+                  </span>
+                ))}
+                {complete && (
+                  <span style={{ fontSize: 12.5, fontWeight: 800, color: UA.green, marginLeft: "auto" }}>
+                    🎉 All challenges cleared — submit when ready
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Pre-work review — the lesson before the dialogue */}
+            {gen.primer && (
+              <div style={{ ...cardStyle, padding: primerOpen ? 18 : "12px 18px" }}>
+                <div onClick={() => setPrimerOpen(!primerOpen)}
+                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 800, color: UA.navy }}>
+                    📖 Before you start — what you need to know
+                  </div>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: UA.textMuted }}>{primerOpen ? "▲ hide" : "▼ review"}</span>
+                </div>
+                {primerOpen && (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 14, lineHeight: 1.7, color: UA.textSec }}>{gen.primer}</div>
+                    <button onClick={(e) => { e.stopPropagation(); speak(gen.primer); }}
+                      style={{ marginTop: 8, background: "transparent", border: "none", cursor: "pointer", fontSize: 12, color: UA.navy, padding: 0, fontWeight: 700 }}>
+                      🔊 Read aloud
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Interactive board builder */}
+            {gen.buildTask && (
+              <div style={{ ...cardStyle, borderLeft: `4px solid ${UA.navy}` }}>
+                <div style={{ fontSize: 14, fontWeight: 800, color: UA.navy, marginBottom: 4 }}>🧩 {gen.buildTask.title}</div>
+                <div style={{ fontSize: 12.5, color: UA.textSec, marginBottom: 10, lineHeight: 1.5 }}>
+                  {gen.buildTask.prompt} <b>Tap an item, then tap a column to place it.</b> Tap a placed item to remove it.
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                  {gen.buildTask.items.filter((it) => boardAssign[it] === undefined).map((it) => (
+                    <button key={it} onClick={() => setSelectedItem(selectedItem === it ? null : it)}
+                      style={{
+                        padding: "6px 12px", borderRadius: 999, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                        background: selectedItem === it ? UA.red : UA.card,
+                        color: selectedItem === it ? "#fff" : UA.text,
+                        border: `1.5px solid ${selectedItem === it ? UA.red : UA.borderStrong}`,
+                      }}>{it}</button>
+                  ))}
+                  {gen.buildTask.items.every((it) => boardAssign[it] !== undefined) && (
+                    <span style={{ fontSize: 12, color: UA.green, fontWeight: 700 }}>✓ Everything placed</span>
+                  )}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: `repeat(${gen.buildTask.columns.length}, 1fr)`, gap: 10 }}>
+                  {gen.buildTask.columns.map((col, ci) => (
+                    <div key={ci} onClick={() => { if (selectedItem) { setBoardAssign({ ...boardAssign, [selectedItem]: ci }); setSelectedItem(null); } }}
+                      style={{
+                        border: `2px ${selectedItem ? "dashed " + UA.red : "solid " + UA.navyBorder}`, borderRadius: 10,
+                        minHeight: 110, padding: 10, cursor: selectedItem ? "pointer" : "default", background: UA.navyLight,
+                      }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 800, color: UA.navy, marginBottom: 8, textAlign: "center" }}>{col}</div>
+                      <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                        {gen.buildTask.items.filter((it) => boardAssign[it] === ci).map((it) => (
+                          <button key={it} onClick={(e) => { e.stopPropagation(); const b = { ...boardAssign }; delete b[it]; setBoardAssign(b); }}
+                            title="Tap to remove"
+                            style={{ padding: "5px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: "pointer", background: "#fff", border: `1px solid ${UA.navyBorder}`, color: UA.text }}>
+                            {it}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={() => {
+                    const boardText = `Here's my completed board for "${gen.buildTask.title}" — ${gen.buildTask.columns.map((col, ci) => `${col}: ${gen.buildTask.items.filter((it) => boardAssign[it] === ci).join(", ") || "(empty)"}`).join(" | ")}${gen.buildTask.items.some((it) => boardAssign[it] === undefined) ? ` | Not placed: ${gen.buildTask.items.filter((it) => boardAssign[it] === undefined).join(", ")}` : ""}`;
+                    setBoardShared(true);
+                    sendStudentMessage(boardText);
+                  }}
+                  disabled={aiTyping || Object.keys(boardAssign).length === 0}
+                  style={{
+                    marginTop: 12, background: Object.keys(boardAssign).length === 0 ? UA.border : UA.navy,
+                    color: "#fff", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 800, cursor: "pointer",
+                  }}>
+                  {boardShared ? "Share updated board →" : "Share my board with the AI →"}
+                </button>
+              </div>
+            )}
+
+              </div>{/* end LEFT COLUMN */}
+
+              {/* RIGHT COLUMN — the live dialogue */}
+              <div className="amt-dialogue" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+
+            <div style={{ ...cardStyle, padding: 18, maxHeight: 520, minHeight: 300, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
+              {chat.map((m, i) => (
+                <div key={i} style={{
+                  alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+                  maxWidth: "82%", padding: "11px 15px", borderRadius: 14, fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap",
+                  background: m.role === "user" ? UA.navy : UA.navyLight,
+                  color: m.role === "user" ? "#fff" : UA.text,
+                  border: m.role === "user" ? "none" : `1px solid ${UA.navyBorder}`,
+                }}>
+                  {m.content}
+                  {m.svg && (
+                    <div style={{ marginTop: 10, background: "#fff", border: `1px solid ${UA.border}`, borderRadius: 10, padding: 8, overflow: "hidden" }}
+                      dangerouslySetInnerHTML={{ __html: m.svg }} />
+                  )}
+                  {m.role === "assistant" && (
+                    <button onClick={() => speak(m.content)} title="Read this message aloud"
+                      style={{ display: "block", marginTop: 4, background: "transparent", border: "none", cursor: "pointer", fontSize: 13, padding: 0, opacity: 0.55 }}>
+                      🔊
+                    </button>
+                  )}
+                </div>
+              ))}
+              {aiTyping && <div style={{ alignSelf: "flex-start", padding: "11px 15px", borderRadius: 14, background: UA.navyLight, border: `1px solid ${UA.navyBorder}`, color: UA.textMuted, fontSize: 13 }}>thinking…</div>}
+              <div ref={chatEndRef} />
+            </div>
+
+            {micError && (
+              <div style={{ fontSize: 12, color: UA.amber, background: UA.amberBg, border: `1px solid ${UA.amberBorder}`, borderRadius: 8, padding: "8px 12px" }}>{micError}</div>
+            )}
+            {listening && (
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: UA.red, display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ width: 9, height: 9, borderRadius: "50%", background: UA.red, display: "inline-block", animation: "none" }} />
+                Listening — speak your answer, it will appear below. Tap the mic again to stop.
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={toggleMic}
+                title="Speak your answer instead of typing"
+                style={{
+                  background: listening ? UA.red : UA.card, color: listening ? "#fff" : UA.red,
+                  border: `2px solid ${UA.red}`, borderRadius: 10, padding: "0 16px", fontSize: 18, cursor: "pointer", minWidth: 52,
+                }}>
+                🎤
+              </button>
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendStudentMessage(); } }}
+                placeholder={listening ? "Listening… speak, or type to add" : "Type your thinking — or tap the mic and say it out loud"}
+                rows={2}
+                style={{ flex: 1, padding: "11px 14px", border: `1px solid ${listening ? UA.red : UA.borderStrong}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit", resize: "none" }}
+              />
+              <button onClick={sendStudentMessage} disabled={aiTyping} style={{ background: UA.navy, color: "#fff", border: "none", borderRadius: 10, padding: "0 22px", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: aiTyping ? 0.5 : 1 }}>
+                Send
+              </button>
+            </div>
+
+              </div>{/* end RIGHT COLUMN */}
+            </div>{/* end amt-session grid */}
+          </div>
+        )}
+
+        {/* ══ SUMMARIZING ══ */}
+        {phase === "summarizing" && (
+          <div style={{ ...cardStyle, textAlign: "center", padding: 48, fontSize: 14.5, fontWeight: 700, color: UA.navy }}>
+            Analyzing the student's generative thinking…
+          </div>
+        )}
+
+        {/* ══ SUMMARY ══ */}
+        {phase === "summary" && summary && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ ...cardStyle, display: "flex", alignItems: "center", gap: 16, borderLeft: `4px solid ${UA.navy}`, flexWrap: "wrap" }}>
+              <div>
+                <div style={label}>Engagement demonstrated</div>
+                <IcapBadge level={summary.engagementLevel} />
+              </div>
+              <div>
+                <div style={label}>Completion</div>
+                <span style={{
+                  display: "inline-block", padding: "4px 12px", borderRadius: 999, fontSize: 12, fontWeight: 800,
+                  background: complete ? UA.greenBg : UA.amberBg,
+                  border: `1px solid ${complete ? UA.greenBorder : UA.amberBorder}`,
+                  color: complete ? UA.green : UA.amber,
+                }}>
+                  {complete ? "✓ Complete" : `${progress.filter(Boolean).length}/${progress.length} challenges`}
+                </span>
+              </div>
+              {durationMin !== null && (
+                <div>
+                  <div style={label}>Engaged time</div>
+                  <span style={{ display: "inline-block", padding: "4px 12px", borderRadius: 999, fontSize: 12, fontWeight: 800, background: UA.navyLight, border: `1px solid ${UA.navyBorder}`, color: UA.navy }}>
+                    ⏱ {durationMin} min
+                  </span>
+                </div>
+              )}
+              <div>
+                <div style={label}>Turns</div>
+                <span style={{ display: "inline-block", padding: "4px 12px", borderRadius: 999, fontSize: 12, fontWeight: 800, background: UA.navyLight, border: `1px solid ${UA.navyBorder}`, color: UA.navy }}>
+                  💬 {chat.filter((m) => m.role === "user").length}
+                </span>
+              </div>
+              {gen?.buildTask && (
+                <div>
+                  <div style={label}>Submission</div>
+                  <span style={{ display: "inline-block", padding: "4px 12px", borderRadius: 999, fontSize: 12, fontWeight: 800, background: UA.navyLight, border: `1px solid ${UA.navyBorder}`, color: UA.navy }}>
+                    {(gen.submission || "transcript+artifact") === "transcript+artifact" ? "🧩 Artifact + transcript" : "Transcript only"}
+                  </span>
+                </div>
+              )}
+              <div style={{ borderLeft: `1px solid ${UA.border}`, paddingLeft: 16, fontSize: 13, color: UA.textSec, lineHeight: 1.6, flex: 1, minWidth: 220 }}>
+                {summary.recommendation}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
+              <div style={{ ...cardStyle, background: UA.greenBg, borderColor: UA.greenBorder }}>
+                <div style={{ ...label, color: UA.green }}>Reasoned well</div>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.8, color: UA.text }}>
+                  {summary.reasonedWell.map((r, i) => <li key={i}>{r}</li>)}
+                </ul>
+              </div>
+              <div style={{ ...cardStyle, background: UA.amberBg, borderColor: UA.amberBorder }}>
+                <div style={{ ...label, color: UA.amber }}>Struggled / follow up</div>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.8, color: UA.text }}>
+                  {summary.struggled.map((s, i) => <li key={i}>{s}</li>)}
+                </ul>
+              </div>
+            </div>
+
+            {gen?.artifact && nodes.some(Boolean) && (
+              <div style={{ ...cardStyle, borderLeft: `4px solid ${UA.navy}` }}>
+                <div style={label}>Submitted artifact: {gen.artifact.title}</div>
+                <div style={{ fontSize: 11.5, color: UA.textMuted, marginBottom: 10 }}>
+                  Built and defended node by node in the transcript below. {nodes.filter(Boolean).length} of {nodes.length} nodes locked.
+                </div>
+                {gen.artifact.nodes.map((n, i) => (
+                  <div key={i}>
+                    <div style={{ display: "flex", gap: 10, padding: "8px 12px", borderRadius: 8, background: nodes[i] ? UA.greenBg : UA.amberBg, border: `1px solid ${nodes[i] ? UA.greenBorder : UA.amberBorder}` }}>
+                      <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", color: nodes[i] ? UA.green : UA.amber, minWidth: 120 }}>{n.marker ? `${n.marker} · ` : ""}{n.label}</span>
+                      <span style={{ fontSize: 13, color: UA.text, lineHeight: 1.5 }}>{nodes[i] || "— not established"}</span>
+                    </div>
+                    {i < gen.artifact.nodes.length - 1 && <div style={{ height: 8, textAlign: "center", fontSize: 10, color: UA.borderStrong }}>↓</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {gen?.buildTask && boardShared && (gen.submission || "transcript+artifact") === "transcript+artifact" && (
+              <div style={{ ...cardStyle, borderLeft: `4px solid ${UA.navy}` }}>
+                <div style={label}>🧩 Submitted artifact: {gen.buildTask.title}</div>
+                <div style={{ display: "grid", gridTemplateColumns: `repeat(${gen.buildTask.columns.length}, 1fr)`, gap: 10, marginTop: 8 }}>
+                  {gen.buildTask.columns.map((col, ci) => (
+                    <div key={ci} style={{ border: `1px solid ${UA.navyBorder}`, borderRadius: 10, padding: 10, background: UA.navyLight }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 800, color: UA.navy, marginBottom: 8, textAlign: "center" }}>{col}</div>
+                      <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                        {gen.buildTask.items.filter((it) => boardAssign[it] === ci).map((it) => (
+                          <span key={it} style={{ padding: "5px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600, background: "#fff", border: `1px solid ${UA.navyBorder}`, color: UA.text }}>{it}</span>
+                        ))}
+                        {gen.buildTask.items.filter((it) => boardAssign[it] === ci).length === 0 && (
+                          <span style={{ fontSize: 12, color: UA.textMuted }}>(empty)</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={cardStyle}>
+              <div style={label}>Full transcript (the submission)</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
+                {chat.map((m, i) => (
+                  <div key={i} style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                    <span style={{ fontWeight: 800, color: m.role === "user" ? UA.red : UA.navy }}>
+                      {m.role === "user" ? "STUDENT" : "AI"} ·{" "}
+                    </span>
+                    <span style={{ color: UA.textSec }}>{m.content}</span>
+                    {m.svg && (
+                      <div style={{ marginTop: 8, maxWidth: 420, background: "#fff", border: `1px solid ${UA.border}`, borderRadius: 10, padding: 8, overflow: "hidden" }}
+                        dangerouslySetInnerHTML={{ __html: m.svg }} />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <button onClick={reset} style={{ alignSelf: "flex-start", background: UA.red, color: "#fff", border: "none", borderRadius: 10, padding: "12px 24px", fontSize: 14, fontWeight: 800, cursor: "pointer" }}>
+              Run another assignment
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
